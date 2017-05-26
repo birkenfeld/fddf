@@ -13,10 +13,10 @@ use std::sync::mpsc::{channel, Sender};
 use std::collections::hash_map::Entry;
 use crypto::digest::Digest;
 
-fn hash_file(verbose: bool, fsize: u64, path: PathBuf, tx: Sender<(u64, PathBuf, [u8; 16])>) {
-    let mut hash = [0u8; 16];
+fn hash_file(verbose: bool, fsize: u64, path: PathBuf, tx: Sender<(u64, PathBuf, [u8; 20])>) {
+    let mut hash = [0u8; 20];
     let mut buf = [0u8; 4096];
-    let mut md5 = crypto::md5::Md5::new();
+    let mut sha = crypto::sha1::Sha1::new();
     if verbose {
         eprintln!("Hashing {}...", path.display());
     }
@@ -24,9 +24,9 @@ fn hash_file(verbose: bool, fsize: u64, path: PathBuf, tx: Sender<(u64, PathBuf,
         Ok(mut fp) => {
             while let Ok(n) = fp.read(&mut buf) {
                 if n == 0 { break; }
-                md5.input(&buf);
+                sha.input(&buf);
             }
-            md5.result(&mut hash);
+            sha.result(&mut hash);
             tx.send((fsize, path, hash)).unwrap();
         }
         Err(e) => {
