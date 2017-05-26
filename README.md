@@ -9,8 +9,8 @@ Duplicates are found by checking size, then SHA-1.  No byte-for-byte comparison 
 ## Build and use
 
 ```
-cargo build
-cargo run
+cargo build --release
+cargo run --release
 ```
 
 Not yet submitted to crates.io.
