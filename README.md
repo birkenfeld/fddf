@@ -6,11 +6,23 @@ It uses a thread pool to calculate file hashes in parallel.
 
 Duplicates are found by checking size, then SHA-1.  No byte-for-byte comparison is made.
 
-## Build and use
+## Build/install
 
+Directly from crates.io with `cargo install fddf`.
+
+From checkout:
 ```
 cargo build --release
 cargo run --release
 ```
 
-Not yet submitted to crates.io.
+## Usage
+
+```
+fddf [-s] [-z] <rootdir>
+
+-s: report dupe groups in a single line
+-z: report zero-length files a group of dupes
+```
+
+PRs welcome!
