@@ -3,7 +3,7 @@ extern crate clap;
 extern crate walkdir;
 extern crate scoped_pool;
 extern crate num_cpus;
-extern crate crypto;
+extern crate sha1;
 extern crate fnv;
 
 use std::fs::File;
@@ -11,12 +11,10 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Sender};
 use std::collections::hash_map::Entry;
-use crypto::digest::Digest;
 
 fn hash_file(verbose: bool, fsize: u64, path: PathBuf, tx: Sender<(u64, PathBuf, [u8; 20])>) {
-    let mut hash = [0u8; 20];
     let mut buf = [0u8; 4096];
-    let mut sha = crypto::sha1::Sha1::new();
+    let mut sha = sha1::Sha1::new();
     if verbose {
         eprintln!("Hashing {}...", path.display());
     }
@@ -24,9 +22,9 @@ fn hash_file(verbose: bool, fsize: u64, path: PathBuf, tx: Sender<(u64, PathBuf,
         Ok(mut fp) => {
             while let Ok(n) = fp.read(&mut buf) {
                 if n == 0 { break; }
-                sha.input(&buf);
+                sha.update(&buf[..n]);
             }
-            sha.result(&mut hash);
+            let hash = sha.digest().bytes();
             tx.send((fsize, path, hash)).unwrap();
         }
         Err(e) => {
