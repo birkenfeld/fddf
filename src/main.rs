@@ -48,27 +48,38 @@ fn main() {
     let verbose = args.is_present("verbose");
     let root = args.value_of("root").unwrap();
 
-    let pool = scoped_pool::Pool::new(num_cpus::get() + 1);
-
+    // See below for these maps' purpose.
     let mut sizes = fnv::FnvHashMap::default();
-    let mut inodes = fnv::FnvHashSet::default();
     let mut hashes = fnv::FnvHashMap::default();
+    let mut inodes = fnv::FnvHashSet::default();
 
+    // Set up thread pool for our various tasks.  Number of CPUs + 1 has been
+    // found to be a good pool size, likely since the walker thread should be
+    // doing mostly IO.
+    let pool = scoped_pool::Pool::new(num_cpus::get() + 1);
     pool.scoped(|scope| {
         let (tx, rx) = channel();
-        let hashref = &mut hashes;
 
-        scope.execute(move ||
+        // One long-living job to collect hashes and populate the "hashes"
+        // hashmap, received from the hashing jobs.  Only hashmap entries
+        // with more than one vector element are duplicates in the end.
+        let hashref = &mut hashes;
+        scope.execute(move || {
             for (size, path, hash) in rx.iter() {
-                hashref.entry(hash).or_insert_with(Vec::new).push((size, path));
+                hashref.entry((size, hash)).or_insert_with(Vec::new).push(path);
             }
-        );
+        });
 
         enum Found {
             One(PathBuf),
             Multiple
         }
 
+        // Processing a single file entry, with the "sizes" hashmap collecting
+        // same-size files.  Entries are either Found::One or Found::Multiple,
+        // so that we can submit the first file's path as a hashing job when the
+        // first duplicate is found.  Hashing each file is submitted as a job to
+        // the pool.
         let mut process = |fsize, dir_entry: walkdir::DirEntry| {
             let path = dir_entry.path().to_path_buf();
             match sizes.entry(fsize) {
@@ -87,10 +98,14 @@ fn main() {
             }
         };
 
+        // The main thread just walks and filters the directory tree.  Symlinks
+        // are uninteresting and ignored, as are any errors retrieving metadata.
         for dir_entry in walkdir::WalkDir::new(root).follow_links(false) {
             if let Ok(dir_entry) = dir_entry {
                 if let Ok(meta) = dir_entry.metadata() {
                     let fsize = meta.len();
+                    // We take care to avoid visiting a single inode twice,
+                    // which takes care of (false positive) hardlinks.
                     if meta.is_file() && (zerolen || fsize != 0) && inodes.insert(dir_entry.ino()) {
                         process(fsize, dir_entry);
                     }
@@ -99,20 +114,21 @@ fn main() {
         }
     });
 
+    // Present results to the user.
     let singleline = args.is_present("singleline");
-    for (_, entries) in hashes {
+    for ((size, _), entries) in hashes {
         if entries.len() > 1 {
             if singleline {
                 let last = entries.len() - 1;
-                for (i, (_, path)) in entries.into_iter().enumerate() {
+                for (i, path) in entries.into_iter().enumerate() {
                     print!("{}", path.display());
                     if i < last {
                         print!(" ");
                     }
                 }
             } else {
-                println!("Size {} bytes:", entries[0].0);
-                for (_, path) in entries {
+                println!("Size {} bytes:", size);
+                for path in entries {
                     println!("    {}", path.display());
                 }
             }
