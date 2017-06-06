@@ -7,7 +7,7 @@ extern crate sha1;
 extern crate fnv;
 
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Write, stderr};
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Sender};
 use std::collections::hash_map::Entry;
@@ -16,7 +16,7 @@ fn hash_file(verbose: bool, fsize: u64, path: PathBuf, tx: Sender<(u64, PathBuf,
     let mut buf = [0u8; 4096];
     let mut sha = sha1::Sha1::new();
     if verbose {
-        eprintln!("Hashing {}...", path.display());
+        let _ = writeln!(stderr(), "Hashing {}...", path.display());
     }
     match File::open(&path) {
         Ok(mut fp) => {
@@ -28,7 +28,7 @@ fn hash_file(verbose: bool, fsize: u64, path: PathBuf, tx: Sender<(u64, PathBuf,
             tx.send((fsize, path, hash)).unwrap();
         }
         Err(e) => {
-            eprintln!("Error opening file {}: {}", path.display(), e);
+            let _ = writeln!(stderr(), "Error opening file {}: {}", path.display(), e);
         }
     }
 }
