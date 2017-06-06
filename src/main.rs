@@ -7,12 +7,13 @@ extern crate sha1;
 extern crate fnv;
 
 use std::fs::File;
-use std::io::{Read, Write, stderr};
+use std::io::{Read, Write, Seek, SeekFrom, stderr};
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Sender};
 use std::collections::hash_map::Entry;
 
-fn hash_file(verbose: bool, fsize: u64, path: PathBuf, tx: Sender<(u64, PathBuf, [u8; 20])>) {
+fn hash_file(verbose: bool, fsize: u64, path: PathBuf,
+             tx: Sender<(u64, PathBuf, [u8; 20])>) {
     let mut buf = [0u8; 4096];
     let mut sha = sha1::Sha1::new();
     if verbose {
@@ -20,9 +21,12 @@ fn hash_file(verbose: bool, fsize: u64, path: PathBuf, tx: Sender<(u64, PathBuf,
     }
     match File::open(&path) {
         Ok(mut fp) => {
+            // Since we compare byte-by-byte anyway, we don't need to hash the
+            // whole file.  Instead, hash a block of 4096 bytes every MB.
             while let Ok(n) = fp.read(&mut buf) {
                 if n == 0 { break; }
                 sha.update(&buf[..n]);
+                let _ = fp.seek(SeekFrom::Current(1024 * 1024));
             }
             let hash = sha.digest().bytes();
             tx.send((fsize, path, hash)).unwrap();
@@ -31,6 +35,58 @@ fn hash_file(verbose: bool, fsize: u64, path: PathBuf, tx: Sender<(u64, PathBuf,
             let _ = writeln!(stderr(), "Error opening file {}: {}", path.display(), e);
         }
     }
+}
+
+struct Candidate {
+    file: File,
+    path: PathBuf,
+    buf: [u8; 4096],
+    n: usize,
+}
+
+fn compare_files_inner(fsize: u64, mut todo: Vec<Candidate>, tx: &Sender<(u64, Vec<PathBuf>)>) {
+    'outer: loop {
+        // Collect all candidates where buffer differs from the first.
+        let mut todo_diff = Vec::new();
+        for i in (1..todo.len()).rev() {
+            if &todo[i].buf[..todo[i].n] != &todo[0].buf[..todo[0].n] {
+                todo_diff.push(todo.swap_remove(i));
+            }
+        }
+        // If there are enough of them, compare them among themselves.
+        if todo_diff.len() >= 2 {
+            // Note that they will compare their current buffer again as
+            // the first step, which is exactly what we want.
+            compare_files_inner(fsize, todo_diff, tx);
+        }
+        // If there is only the first left here, no dupes.
+        if todo.len() < 2 {
+            return;
+        }
+        // Read a new block of data from all files.
+        for cand in &mut todo {
+            match cand.file.read(&mut cand.buf) {
+                Ok(n) if n > 0 => cand.n = n,
+                _ => break 'outer,
+            }
+        }
+    }
+    // We are finished and have more than one file in the candidate list.
+    tx.send((fsize, todo.into_iter().map(|item| item.path).collect())).unwrap();
+}
+
+fn compare_files(verbose: bool, fsize: u64, paths: Vec<PathBuf>,
+                 tx: Sender<(u64, Vec<PathBuf>)>) {
+    if verbose {
+        for path in &paths {
+            let _ = writeln!(stderr(), "Comparing {}...", path.display());
+        }
+    }
+    // Note: since all files were previously hashed, unwrap()ping the open here.
+    let todo = paths.into_iter().map(|p| {
+        Candidate { file: File::open(&p).unwrap(), path: p, buf: [0u8; 4096], n: 0 }
+    }).collect::<Vec<_>>();
+    compare_files_inner(fsize, todo, &tx);
 }
 
 fn main() {
@@ -114,25 +170,41 @@ fn main() {
         }
     });
 
+    // Compare files with matching hashes byte-by-byte, using the same thread
+    // pool strategy as above.
+    let mut dupes = Vec::new();
+    pool.scoped(|scope| {
+        let (tx, rx) = channel();
+
+        let duperef = &mut dupes;
+        scope.execute(move || duperef.extend(rx.iter()));
+
+        // Compare found files with same size and hash byte-by-byte.
+        for ((fsize, _), entries) in hashes {
+            if entries.len() > 1 {
+                let txc = tx.clone();
+                scope.execute(move || compare_files(verbose, fsize, entries, txc));
+            }
+        }
+    });
+
     // Present results to the user.
     let singleline = args.is_present("singleline");
-    for ((size, _), entries) in hashes {
-        if entries.len() > 1 {
-            if singleline {
-                let last = entries.len() - 1;
-                for (i, path) in entries.into_iter().enumerate() {
-                    print!("{}", path.display());
-                    if i < last {
-                        print!(" ");
-                    }
-                }
-            } else {
-                println!("Size {} bytes:", size);
-                for path in entries {
-                    println!("    {}", path.display());
+    for (size, entries) in dupes {
+        if singleline {
+            let last = entries.len() - 1;
+            for (i, path) in entries.into_iter().enumerate() {
+                print!("{}", path.display());
+                if i < last {
+                    print!(" ");
                 }
             }
-            println!();
+        } else {
+            println!("Size {} bytes:", size);
+            for path in entries {
+                println!("    {}", path.display());
+            }
         }
+        println!();
     }
 }
