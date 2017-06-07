@@ -20,10 +20,13 @@ cargo run --release
 ## Usage
 
 ```
-fddf [-s] [-z] <rootdir>
+fddf [-s] [-t] [-m SIZE] [-M SIZE] [-v] <rootdir>
 
 -s: report dupe groups in a single line
--z: report zero-length files a group of dupes
+-t: produce a grand total
+-m: minimum size (default 1 byte)
+-M: maximum size (default unlimited)
+-v: verbose operation
 ```
 
 PRs welcome!

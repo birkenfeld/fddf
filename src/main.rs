@@ -5,52 +5,115 @@ extern crate scoped_pool;
 extern crate num_cpus;
 extern crate blake2;
 extern crate fnv;
+extern crate unbytify;
 
 use std::fs::File;
-use std::io::{Read, Write, Seek, SeekFrom, stderr};
+use std::io::{self, Read, Write, Seek, SeekFrom, stderr};
 use std::path::PathBuf;
-use std::sync::mpsc::{channel, Sender};
+use std::sync::mpsc::{Sender, channel};
 use std::collections::hash_map::Entry;
 use blake2::{Blake2b, Digest};
 
-fn hash_file(verbose: bool, fsize: u64, path: PathBuf,
-             tx: Sender<(u64, PathBuf, Vec<u8>)>) {
-    let mut buf = [0u8; 4096];
+fn err(path: &PathBuf, err: io::Error) {
+    let _ = writeln!(stderr(), "Error processing file {}: {}", path.display(), err);
+}
+
+type HashSender = Sender<(u64, PathBuf, Vec<u8>)>;
+type DupeSender = Sender<(u64, Vec<PathBuf>)>;
+
+const BLOCKSIZE: usize = 4096;
+const GAPSIZE: i64 = 102400;
+
+fn hash_file_inner(path: &PathBuf) -> io::Result<Vec<u8>> {
+    let mut buf = [0u8; BLOCKSIZE];
+    let mut fp = File::open(&path)?;
     let mut digest = Blake2b::default();
+    // When we compare byte-by-byte, we don't need to hash the whole file.
+    // Instead, hash a block of 4kB, skipping 100kB.
+    loop {
+        match fp.read(&mut buf)? {
+            0 => break,
+            n => digest.input(&buf[..n]),
+        }
+        fp.seek(SeekFrom::Current(GAPSIZE))?;
+    }
+    Ok(digest.result().to_vec())
+}
+
+fn hash_file(verbose: bool, fsize: u64, path: PathBuf, tx: HashSender) {
     if verbose {
         let _ = writeln!(stderr(), "Hashing {}...", path.display());
     }
-    match File::open(&path) {
-        Ok(mut fp) => {
-            // Since we compare byte-by-byte anyway, we don't need to hash the
-            // whole file.  Instead, hash a block of 4096 bytes every MB.
-            while let Ok(n) = fp.read(&mut buf) {
-                if n == 0 { break; }
-                digest.input(&buf[..n]);
-                let _ = fp.seek(SeekFrom::Current(1024 * 1024));
-            }
-            let hash = digest.result().to_vec();
-            tx.send((fsize, path, hash)).unwrap();
-        }
-        Err(e) => {
-            let _ = writeln!(stderr(), "Error opening file {}: {}", path.display(), e);
-        }
+    match hash_file_inner(&path) {
+        Ok(hash) => tx.send((fsize, path, hash)).unwrap(),
+        Err(e) => err(&path, e),
     }
 }
 
-struct Candidate {
-    file: File,
+trait Candidate {
+    fn read_block(&mut self) -> Result<usize, ()>;
+    fn buf_equal(&self, other: &Self) -> bool;
+    fn into_path(self) -> PathBuf;
+}
+
+struct FastCandidate {
     path: PathBuf,
-    buf: [u8; 4096],
+    file: File,
+    buf: [u8; BLOCKSIZE],
     n: usize,
 }
 
-fn compare_files_inner(fsize: u64, mut todo: Vec<Candidate>, tx: &Sender<(u64, Vec<PathBuf>)>) {
+struct SlowCandidate {
+    path: PathBuf,
+    pos: usize,
+    buf: [u8; BLOCKSIZE],
+    n: usize,
+}
+
+impl Candidate for FastCandidate {
+    fn read_block(&mut self) -> Result<usize, ()> {
+        match self.file.read(&mut self.buf) {
+            Ok(n) => { self.n = n; Ok(n) },
+            Err(e) => { err(&self.path, e); Err(()) }
+        }
+    }
+
+    fn buf_equal(&self, other: &Self) -> bool {
+        self.buf[..self.n] == other.buf[..other.n]
+    }
+
+    fn into_path(self) -> PathBuf {
+        self.path
+    }
+}
+
+impl Candidate for SlowCandidate {
+    fn read_block(&mut self) -> Result<usize, ()> {
+        match File::open(&self.path).and_then(|mut f| {
+            f.seek(SeekFrom::Start(self.pos as u64)).and_then(|_| {
+                f.read(&mut self.buf)
+            })
+        }) {
+            Ok(n) => { self.n = n; self.pos += n; Ok(n) },
+            Err(e) => { err(&self.path, e); Err(()) }
+        }
+    }
+
+    fn buf_equal(&self, other: &Self) -> bool {
+        self.buf[..self.n] == other.buf[..other.n]
+    }
+
+    fn into_path(self) -> PathBuf {
+        self.path
+    }
+}
+
+fn compare_files_inner<C: Candidate>(fsize: u64, mut todo: Vec<C>, tx: &DupeSender) {
     'outer: loop {
         // Collect all candidates where buffer differs from the first.
         let mut todo_diff = Vec::new();
         for i in (1..todo.len()).rev() {
-            if &todo[i].buf[..todo[i].n] != &todo[0].buf[..todo[0].n] {
+            if !todo[i].buf_equal(&todo[0]) {
                 todo_diff.push(todo.swap_remove(i));
             }
         }
@@ -60,34 +123,52 @@ fn compare_files_inner(fsize: u64, mut todo: Vec<Candidate>, tx: &Sender<(u64, V
             // the first step, which is exactly what we want.
             compare_files_inner(fsize, todo_diff, tx);
         }
-        // If there is only the first left here, no dupes.
+        // If there are not enough candidates left, no dupes.
         if todo.len() < 2 {
             return;
         }
         // Read a new block of data from all files.
-        for cand in &mut todo {
-            match cand.file.read(&mut cand.buf) {
-                Ok(n) if n > 0 => cand.n = n,
-                _ => break 'outer,
+        for i in (0..todo.len()).rev() {
+            match todo[i].read_block() {
+                // If we're at EOF, all remaining are dupes.
+                Ok(0) => break 'outer,
+                // If an error occurs, do not process this file further.
+                Err(_) => { todo.remove(i); }
+                _ => ()
             }
         }
     }
     // We are finished and have more than one file in the candidate list.
-    tx.send((fsize, todo.into_iter().map(|item| item.path).collect())).unwrap();
+    tx.send((fsize, todo.into_iter().map(Candidate::into_path).collect())).unwrap();
 }
 
-fn compare_files(verbose: bool, fsize: u64, paths: Vec<PathBuf>,
-                 tx: Sender<(u64, Vec<PathBuf>)>) {
+fn compare_files(verbose: bool, fsize: u64, paths: Vec<PathBuf>, tx: DupeSender) {
     if verbose {
         for path in &paths {
             let _ = writeln!(stderr(), "Comparing {}...", path.display());
         }
     }
-    // Note: since all files were previously hashed, unwrap()ping the open here.
-    let todo = paths.into_iter().map(|p| {
-        Candidate { file: File::open(&p).unwrap(), path: p, buf: [0u8; 4096], n: 0 }
-    }).collect::<Vec<_>>();
-    compare_files_inner(fsize, todo, &tx);
+    // If there are too many candidates, we cannot process them opening all
+    // files at the same time.
+    if paths.len() < 100 {
+        let todo = paths.into_iter().filter_map(|p| {
+            match File::open(&p) {
+                Ok(f) => Some(FastCandidate { path: p, file: f, buf: [0u8; BLOCKSIZE], n: 0 }),
+                Err(e) => { err(&p, e); None }
+            }
+        }).collect();
+        compare_files_inner(fsize, todo, &tx);
+    } else {
+        let todo = paths.into_iter().map(|p| {
+            SlowCandidate { path: p, pos: 0, buf: [0u8; BLOCKSIZE], n: 0 }
+        }).collect();
+        compare_files_inner(fsize, todo, &tx);
+    }
+}
+
+fn validate_byte_size(s: String) -> Result<(), String> {
+    unbytify::unbytify(&s).map(|_| ()).map_err(
+        |_| format!("{:?} is not a byte size", s))
 }
 
 fn main() {
@@ -95,15 +176,23 @@ fn main() {
         (version: crate_version!())
         (author: "Georg Brandl, 2017")
         (about: "A parallel duplicate file finder.")
-        (@arg zerolen: -z "Report zero-length files?")
+        (@arg minsize: -m [MINSIZE] default_value("1") validator(validate_byte_size)
+         "Minimum file size to consider")
+        (@arg maxsize: -M [MAXSIZE] validator(validate_byte_size)
+         "Maximum file size to consider")
+        (@arg total: -t "Report a grand total of duplicates?")
         (@arg singleline: -s "Report dupes on a single line?")
         (@arg verbose: -v "Verbose operation?")
-        (@arg root: +required "Root directory to search.")
+        (@arg root: +required +multiple "Root directory or directories to search.")
     ).get_matches();
 
-    let zerolen = args.is_present("zerolen");
+    let singleline = args.is_present("singleline");
+    let grandtotal = args.is_present("total");
     let verbose = args.is_present("verbose");
-    let root = args.value_of("root").unwrap();
+    let minsize = unbytify::unbytify(args.value_of("minsize").unwrap()).unwrap();
+    let maxsize = args.value_of("maxsize").map_or(u64::max_value(),
+                                                  |v| unbytify::unbytify(v).unwrap());
+    let roots = args.values_of("root").unwrap();
 
     // See below for these maps' purpose.
     let mut sizes = fnv::FnvHashMap::default();
@@ -156,56 +245,93 @@ fn main() {
         };
 
         // The main thread just walks and filters the directory tree.  Symlinks
-        // are uninteresting and ignored, as are any errors retrieving metadata.
-        for dir_entry in walkdir::WalkDir::new(root).follow_links(false) {
-            if let Ok(dir_entry) = dir_entry {
-                if let Ok(meta) = dir_entry.metadata() {
-                    let fsize = meta.len();
-                    // We take care to avoid visiting a single inode twice,
-                    // which takes care of (false positive) hardlinks.
-                    if meta.is_file() && (zerolen || fsize != 0) && inodes.insert(dir_entry.ino()) {
-                        process(fsize, dir_entry);
+        // are uninteresting and ignored.
+        for root in roots {
+            for dir_entry in walkdir::WalkDir::new(root).follow_links(false) {
+                match dir_entry {
+                    Ok(dir_entry) => {
+                        if dir_entry.file_type().is_file() {
+                            match dir_entry.metadata() {
+                                Ok(meta) => {
+                                    let fsize = meta.len();
+                                    if fsize >= minsize && fsize <= maxsize {
+                                        // We take care to avoid visiting a single inode twice,
+                                        // which takes care of (false positive) hardlinks.
+                                        if inodes.insert(dir_entry.ino()) {
+                                            process(fsize, dir_entry);
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    let _ = writeln!(stderr(), "{}", e);
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        let _ = writeln!(stderr(), "{}", e);
                     }
                 }
             }
         }
     });
 
-    // Compare files with matching hashes byte-by-byte, using the same thread
-    // pool strategy as above.
-    let mut dupes = Vec::new();
-    pool.scoped(|scope| {
-        let (tx, rx) = channel();
+    let mut total_dupes = 0;
+    let mut total_files = 0;
+    let mut total_size = 0;
 
-        let duperef = &mut dupes;
-        scope.execute(move || duperef.extend(rx.iter()));
-
-        // Compare found files with same size and hash byte-by-byte.
-        for ((fsize, _), entries) in hashes {
-            if entries.len() > 1 {
-                let txc = tx.clone();
-                scope.execute(move || compare_files(verbose, fsize, entries, txc));
-            }
-        }
-    });
-
-    // Present results to the user.
-    let singleline = args.is_present("singleline");
-    for (size, entries) in dupes {
-        if singleline {
-            let last = entries.len() - 1;
-            for (i, path) in entries.into_iter().enumerate() {
-                print!("{}", path.display());
-                if i < last {
-                    print!(" ");
+    {
+        // Present results to the user.
+        let mut print_dupe = |out: &mut io::StdoutLock, size, entries: Vec<PathBuf>| {
+            total_dupes += 1;
+            total_files += entries.len() - 1;
+            total_size += size * (entries.len() - 1) as u64;
+            if singleline {
+                let last = entries.len() - 1;
+                for (i, path) in entries.into_iter().enumerate() {
+                    write!(out, "{}", path.display()).unwrap();
+                    if i < last {
+                        write!(out, " ").unwrap();
+                    }
+                }
+            } else {
+                writeln!(out, "Size {} bytes:", size).unwrap();
+                for path in entries {
+                    writeln!(out, "    {}", path.display()).unwrap();
                 }
             }
-        } else {
-            println!("Size {} bytes:", size);
-            for path in entries {
-                println!("    {}", path.display());
+            writeln!(out).unwrap();
+        };
+
+        // Compare files with matching hashes byte-by-byte, using the same thread
+        // pool strategy as above.
+        pool.scoped(|scope| {
+            let (tx, rx) = channel();
+
+            // Print dupes as they come in.
+            scope.execute(move || {
+                let stdout = io::stdout();
+                let mut stdout = stdout.lock();
+                for (size, entries) in rx.iter() {
+                    print_dupe(&mut stdout, size, entries);
+                }
+            });
+
+            // Compare found files with same size and hash byte-by-byte.
+            for ((fsize, _), entries) in hashes {
+                if entries.len() > 1 {
+                    let txc = tx.clone();
+                    scope.execute(move || compare_files(verbose, fsize, entries, txc));
+                }
             }
-        }
-        println!();
+        });
+    }
+
+    if grandtotal {
+        println!("Overall results:");
+        println!("    {} groups of duplicate files", total_dupes);
+        println!("    {} files are duplicates", total_files);
+        let (val, suffix) = unbytify::bytify(total_size);
+        println!("    {:.1} {} of space taken by dupliates", val, suffix);
     }
 }
