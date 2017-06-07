@@ -3,7 +3,7 @@ extern crate clap;
 extern crate walkdir;
 extern crate scoped_pool;
 extern crate num_cpus;
-extern crate sha1;
+extern crate blake2;
 extern crate fnv;
 
 use std::fs::File;
@@ -11,11 +11,12 @@ use std::io::{Read, Write, Seek, SeekFrom, stderr};
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Sender};
 use std::collections::hash_map::Entry;
+use blake2::{Blake2b, Digest};
 
 fn hash_file(verbose: bool, fsize: u64, path: PathBuf,
-             tx: Sender<(u64, PathBuf, [u8; 20])>) {
+             tx: Sender<(u64, PathBuf, Vec<u8>)>) {
     let mut buf = [0u8; 4096];
-    let mut sha = sha1::Sha1::new();
+    let mut digest = Blake2b::default();
     if verbose {
         let _ = writeln!(stderr(), "Hashing {}...", path.display());
     }
@@ -25,10 +26,10 @@ fn hash_file(verbose: bool, fsize: u64, path: PathBuf,
             // whole file.  Instead, hash a block of 4096 bytes every MB.
             while let Ok(n) = fp.read(&mut buf) {
                 if n == 0 { break; }
-                sha.update(&buf[..n]);
+                digest.input(&buf[..n]);
                 let _ = fp.seek(SeekFrom::Current(1024 * 1024));
             }
-            let hash = sha.digest().bytes();
+            let hash = digest.result().to_vec();
             tx.send((fsize, path, hash)).unwrap();
         }
         Err(e) => {
