@@ -12,7 +12,9 @@ use std::io::{self, Read, Write, Seek, SeekFrom, stderr};
 use std::path::PathBuf;
 use std::sync::mpsc::{Sender, channel};
 use std::collections::hash_map::Entry;
+use fnv::{FnvHashMap as HashMap, FnvHashSet as HashSet};
 use blake2::{Blake2b, Digest};
+use walkdir::{DirEntry, WalkDir};
 
 fn err(path: &PathBuf, err: io::Error) {
     let _ = writeln!(stderr(), "Error processing file {}: {}", path.display(), err);
@@ -195,9 +197,20 @@ fn main() {
     let roots = args.values_of("root").unwrap();
 
     // See below for these maps' purpose.
-    let mut sizes = fnv::FnvHashMap::default();
-    let mut hashes = fnv::FnvHashMap::default();
-    let mut inodes = fnv::FnvHashSet::default();
+    let mut sizes = HashMap::default();
+    let mut hashes = HashMap::default();
+    let mut inodes = HashSet::default();
+
+    // We take care to avoid visiting a single inode twice,
+    // which takes care of (false positive) hardlinks.
+    #[cfg(unix)]
+    fn check_inode(set: &mut HashSet<u64>, entry: &DirEntry) -> bool {
+        set.insert(entry.ino())
+    }
+    #[cfg(not(unix))]
+    fn check_inode(_: &mut HashSet<u64>, _: &DirEntry) -> bool {
+        true
+    }
 
     // Set up thread pool for our various tasks.  Number of CPUs + 1 has been
     // found to be a good pool size, likely since the walker thread should be
@@ -226,7 +239,7 @@ fn main() {
         // so that we can submit the first file's path as a hashing job when the
         // first duplicate is found.  Hashing each file is submitted as a job to
         // the pool.
-        let mut process = |fsize, dir_entry: walkdir::DirEntry| {
+        let mut process = |fsize, dir_entry: DirEntry| {
             let path = dir_entry.path().to_path_buf();
             match sizes.entry(fsize) {
                 Entry::Vacant(v) => {
@@ -247,7 +260,7 @@ fn main() {
         // The main thread just walks and filters the directory tree.  Symlinks
         // are uninteresting and ignored.
         for root in roots {
-            for dir_entry in walkdir::WalkDir::new(root).follow_links(false) {
+            for dir_entry in WalkDir::new(root).follow_links(false) {
                 match dir_entry {
                     Ok(dir_entry) => {
                         if dir_entry.file_type().is_file() {
@@ -255,9 +268,7 @@ fn main() {
                                 Ok(meta) => {
                                     let fsize = meta.len();
                                     if fsize >= minsize && fsize <= maxsize {
-                                        // We take care to avoid visiting a single inode twice,
-                                        // which takes care of (false positive) hardlinks.
-                                        if inodes.insert(dir_entry.ino()) {
+                                        if check_inode(&mut inodes, &dir_entry) {
                                             process(fsize, dir_entry);
                                         }
                                     }
