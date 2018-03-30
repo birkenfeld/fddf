@@ -20,10 +20,13 @@ cargo run --release
 ## Usage
 
 ```
-fddf [-s] [-t] [-m SIZE] [-M SIZE] [-v] <rootdir>
+fddf [-s] [-t] [-S] [-m SIZE] [-M SIZE] [-v] <rootdir>
 
 -s: report dupe groups in a single line
 -t: produce a grand total
+-S: don't scan recursively for each directory given
+-f: check for files with given pattern only
+-F: check for files with given regular expression only
 -m: minimum size (default 1 byte)
 -M: maximum size (default unlimited)
 -v: verbose operation

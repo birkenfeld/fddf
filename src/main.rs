@@ -6,6 +6,8 @@ extern crate num_cpus;
 extern crate blake2;
 extern crate fnv;
 extern crate unbytify;
+extern crate regex;
+extern crate glob;
 
 use std::fs::File;
 use std::io::{self, Read, Write, Seek, SeekFrom};
@@ -18,6 +20,8 @@ use blake2::{Blake2b, Digest};
 use walkdir::{DirEntry, WalkDir};
 #[cfg(unix)]
 use walkdir::DirEntryExt;
+use regex::Regex;
+use glob::Pattern;
 
 fn err(path: &PathBuf, err: io::Error) {
     eprintln!("Error processing file {}: {}", path.display(), err);
@@ -184,19 +188,46 @@ struct Args {
     #[structopt(short="M", parse(try_from_str="parse_byte_size"),
                 help="Maximum file size to consider")]
     maxsize: Option<u64>,
+    #[structopt(short="S", help="Don't scan recursively in directories?")]
+    nonrecursive: bool,
     #[structopt(short="t", help="Report a grand total of duplicates?")]
     grandtotal: bool,
     #[structopt(short="s", help="Report dupes on a single line?")]
     singleline: bool,
     #[structopt(short="v", help="Verbose operation?")]
     verbose: bool,
+    #[structopt(short="f", help="Check only filenames matching this pattern")]
+    pattern: Option<Pattern>,
+    #[structopt(short="F", help="Check only filenames matching this regexp")]
+    regexp: Option<Regex>,
     #[structopt(help="Root directory or directories to search")]
     roots: Vec<String>,
 }
 
 fn main() {
-    let Args { minsize, maxsize, verbose, singleline, grandtotal, roots } = Args::from_args();
+    let Args { minsize, maxsize, verbose, singleline, grandtotal,
+               nonrecursive, pattern, regexp, roots } = Args::from_args();
     let maxsize = maxsize.unwrap_or(u64::max_value());
+
+    enum Select {
+        Pattern(Pattern),
+        Regex(Regex),
+        Any,
+    }
+
+    let select = if let Some(pat) = pattern {
+        Select::Pattern(pat)
+    } else if let Some(regex) = regexp {
+        Select::Regex(regex)
+    } else {
+        Select::Any
+    };
+
+    let matches_pattern = |entry: &DirEntry| match &select {
+        Select::Any => true,
+        Select::Pattern(p) => entry.file_name().to_str().map_or(false, |f| p.matches(f)),
+        Select::Regex(r) => entry.file_name().to_str().map_or(false, |f| r.is_match(f)),
+    };
 
     // See below for these maps' purpose.
     let mut sizes = HashMap::default();
@@ -262,7 +293,12 @@ fn main() {
         // The main thread just walks and filters the directory tree.  Symlinks
         // are uninteresting and ignored.
         for root in roots {
-            for dir_entry in WalkDir::new(root).follow_links(false) {
+            let walkdir = if nonrecursive {
+                WalkDir::new(root).max_depth(1).follow_links(false)
+            } else {
+                WalkDir::new(root).follow_links(false)
+            };
+            for dir_entry in walkdir {
                 match dir_entry {
                     Ok(dir_entry) => {
                         if dir_entry.file_type().is_file() {
@@ -271,7 +307,9 @@ fn main() {
                                     let fsize = meta.len();
                                     if fsize >= minsize && fsize <= maxsize {
                                         if check_inode(&mut inodes, &dir_entry) {
-                                            process(fsize, dir_entry);
+                                            if matches_pattern(&dir_entry) {
+                                                process(fsize, dir_entry);
+                                            }
                                         }
                                     }
                                 }
