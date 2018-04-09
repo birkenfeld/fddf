@@ -6,6 +6,7 @@ extern crate num_cpus;
 extern crate blake2;
 extern crate fnv;
 extern crate unbytify;
+extern crate regex;
 
 use std::fs::File;
 use std::io::{self, Read, Write, Seek, SeekFrom, stderr};
@@ -15,6 +16,7 @@ use std::collections::hash_map::Entry;
 use fnv::{FnvHashMap as HashMap, FnvHashSet as HashSet};
 use blake2::{Blake2b, Digest};
 use walkdir::{DirEntry, WalkDir};
+use regex::Regex;
 
 fn err(path: &PathBuf, err: io::Error) {
     let _ = writeln!(stderr(), "Error processing file {}: {}", path.display(), err);
@@ -173,6 +175,23 @@ fn validate_byte_size(s: String) -> Result<(), String> {
         |_| format!("{:?} is not a byte size", s))
 }
 
+// Create a regular expression from a file pattern:
+// Change
+// 1. "." to "\\."
+// 2. "%" to "."
+// 3. "*" to ".*"
+fn regexp_from_filepat(s: &str) -> Regex {
+    let string = s.to_string().replace(".","\\.").replace("%",".").replace("*",".*");
+
+    Regex::new(format!(r#"{}"#, string).as_str()).unwrap()
+}
+
+fn make_regexp(s: &str) -> Regex {
+    //    let es : String = regex::escape(s);
+    let rs = format!(r#"{}"#, s);
+    Regex::new(rs.as_str()).expect("Invalid regex given")
+}
+
 fn main() {
     let args = clap_app!(fddf =>
         (version: crate_version!())
@@ -182,6 +201,12 @@ fn main() {
          "Minimum file size to consider")
         (@arg maxsize: -M [MAXSIZE] validator(validate_byte_size)
          "Maximum file size to consider")
+        (@group pattern => 
+         (@arg files_pat: -f [PATTERN] 
+          "Check for files with given pattern only")
+         (@arg files_pat_regex: -F [PATTERN]
+          "Check for files with given regular expression only"))
+        (@arg non_recursive: -S "Don't scan recursively for each directory given")
         (@arg total: -t "Report a grand total of duplicates?")
         (@arg singleline: -s "Report dupes on a single line?")
         (@arg verbose: -v "Verbose operation?")
@@ -191,10 +216,19 @@ fn main() {
     let singleline = args.is_present("singleline");
     let grandtotal = args.is_present("total");
     let verbose = args.is_present("verbose");
+    let non_recursive = args.is_present("non_recursive");
     let minsize = unbytify::unbytify(args.value_of("minsize").unwrap()).unwrap();
     let maxsize = args.value_of("maxsize").map_or(u64::max_value(),
                                                   |v| unbytify::unbytify(v).unwrap());
     let roots = args.values_of("root").unwrap();
+
+    let regex = if args.is_present("files_pat") {
+        regexp_from_filepat(args.value_of("files_pat").unwrap()) 
+    } else if args.is_present("files_pat_regex") {
+        make_regexp(args.value_of("files_pat_regex").unwrap()) 
+    } else {
+        Regex::new(r".*").unwrap()
+    };
 
     // See below for these maps' purpose.
     let mut sizes = HashMap::default();
@@ -260,7 +294,13 @@ fn main() {
         // The main thread just walks and filters the directory tree.  Symlinks
         // are uninteresting and ignored.
         for root in roots {
-            for dir_entry in WalkDir::new(root).follow_links(false) {
+            let walkdir = 
+                if non_recursive {
+                    WalkDir::new(root).max_depth(1).follow_links(false)
+                } else {
+                    WalkDir::new(root).min_depth(0).follow_links(false)
+                };
+            for dir_entry in walkdir {
                 match dir_entry {
                     Ok(dir_entry) => {
                         if dir_entry.file_type().is_file() {
@@ -269,7 +309,9 @@ fn main() {
                                     let fsize = meta.len();
                                     if fsize >= minsize && fsize <= maxsize {
                                         if check_inode(&mut inodes, &dir_entry) {
-                                            process(fsize, dir_entry);
+                                            if regex.is_match( dir_entry.file_name().to_str().unwrap() ) {
+                                                process(fsize, dir_entry);
+                                            }
                                         }
                                     }
                                 }
