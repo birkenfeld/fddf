@@ -343,6 +343,6 @@ fn main() {
         println!("    {} groups of duplicate files", total_dupes);
         println!("    {} files are duplicates", total_files);
         let (val, suffix) = unbytify::bytify(total_size);
-        println!("    {:.1} {} of space taken by dupliates", val, suffix);
+        println!("    {:.1} {} of space taken by duplicates", val, suffix);
     }
 }
