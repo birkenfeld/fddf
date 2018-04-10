@@ -29,4 +29,7 @@ fddf [-s] [-t] [-m SIZE] [-M SIZE] [-v] <rootdir>
 -v: verbose operation
 ```
 
+By default, zero-length files are ignored, since there is no meaningful data to
+be duplicated.  Pass `-m 0` to include them.
+
 PRs welcome!
