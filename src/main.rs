@@ -1,5 +1,5 @@
 #[macro_use]
-extern crate clap;
+extern crate structopt;
 extern crate walkdir;
 extern crate scoped_pool;
 extern crate num_cpus;
@@ -12,9 +12,12 @@ use std::io::{self, Read, Write, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::sync::mpsc::{Sender, channel};
 use std::collections::hash_map::Entry;
+use structopt::StructOpt;
 use fnv::{FnvHashMap as HashMap, FnvHashSet as HashSet};
 use blake2::{Blake2b, Digest};
 use walkdir::{DirEntry, WalkDir};
+#[cfg(unix)]
+use walkdir::DirEntryExt;
 
 fn err(path: &PathBuf, err: io::Error) {
     eprintln!("Error processing file {}: {}", path.display(), err);
@@ -168,33 +171,32 @@ fn compare_files(verbose: bool, fsize: u64, paths: Vec<PathBuf>, tx: DupeSender)
     }
 }
 
-fn validate_byte_size(s: String) -> Result<(), String> {
-    unbytify::unbytify(&s).map(|_| ()).map_err(
-        |_| format!("{:?} is not a byte size", s))
+fn parse_byte_size(s: &str) -> Result<u64, String> {
+    unbytify::unbytify(&s).map_err(|_| format!("{:?} is not a byte size", s))
+}
+
+#[derive(StructOpt)]
+#[structopt(about="A parallel duplicate file finder.")]
+struct Args {
+    #[structopt(short="m", default_value="1", parse(try_from_str="parse_byte_size"),
+                help="Minimum file size to consider")]
+    minsize: u64,
+    #[structopt(short="M", parse(try_from_str="parse_byte_size"),
+                help="Maximum file size to consider")]
+    maxsize: Option<u64>,
+    #[structopt(short="t", help="Report a grand total of duplicates?")]
+    grandtotal: bool,
+    #[structopt(short="s", help="Report dupes on a single line?")]
+    singleline: bool,
+    #[structopt(short="v", help="Verbose operation?")]
+    verbose: bool,
+    #[structopt(help="Root directory or directories to search")]
+    roots: Vec<PathBuf>,
 }
 
 fn main() {
-    let args = clap_app!(fddf =>
-        (version: crate_version!())
-        (author: "Georg Brandl, 2017")
-        (about: "A parallel duplicate file finder.")
-        (@arg minsize: -m [MINSIZE] default_value("1") validator(validate_byte_size)
-         "Minimum file size to consider")
-        (@arg maxsize: -M [MAXSIZE] validator(validate_byte_size)
-         "Maximum file size to consider")
-        (@arg total: -t "Report a grand total of duplicates?")
-        (@arg singleline: -s "Report dupes on a single line?")
-        (@arg verbose: -v "Verbose operation?")
-        (@arg root: +required +multiple "Root directory or directories to search.")
-    ).get_matches();
-
-    let singleline = args.is_present("singleline");
-    let grandtotal = args.is_present("total");
-    let verbose = args.is_present("verbose");
-    let minsize = unbytify::unbytify(args.value_of("minsize").unwrap()).unwrap();
-    let maxsize = args.value_of("maxsize").map_or(u64::max_value(),
-                                                  |v| unbytify::unbytify(v).unwrap());
-    let roots = args.values_of("root").unwrap();
+    let Args { minsize, maxsize, verbose, singleline, grandtotal, roots } = Args::from_args();
+    let maxsize = maxsize.unwrap_or(u64::max_value());
 
     // See below for these maps' purpose.
     let mut sizes = HashMap::default();
