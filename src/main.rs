@@ -8,7 +8,7 @@ extern crate fnv;
 extern crate unbytify;
 
 use std::fs::File;
-use std::io::{self, Read, Write, Seek, SeekFrom, stderr};
+use std::io::{self, Read, Write, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::sync::mpsc::{Sender, channel};
 use std::collections::hash_map::Entry;
@@ -17,7 +17,7 @@ use blake2::{Blake2b, Digest};
 use walkdir::{DirEntry, WalkDir};
 
 fn err(path: &PathBuf, err: io::Error) {
-    let _ = writeln!(stderr(), "Error processing file {}: {}", path.display(), err);
+    eprintln!("Error processing file {}: {}", path.display(), err);
 }
 
 type HashSender = Sender<(u64, PathBuf, Vec<u8>)>;
@@ -44,7 +44,7 @@ fn hash_file_inner(path: &PathBuf) -> io::Result<Vec<u8>> {
 
 fn hash_file(verbose: bool, fsize: u64, path: PathBuf, tx: HashSender) {
     if verbose {
-        let _ = writeln!(stderr(), "Hashing {}...", path.display());
+        eprintln!("Hashing {}...", path.display());
     }
     match hash_file_inner(&path) {
         Ok(hash) => tx.send((fsize, path, hash)).unwrap(),
@@ -147,7 +147,7 @@ fn compare_files_inner<C: Candidate>(fsize: u64, mut todo: Vec<C>, tx: &DupeSend
 fn compare_files(verbose: bool, fsize: u64, paths: Vec<PathBuf>, tx: DupeSender) {
     if verbose {
         for path in &paths {
-            let _ = writeln!(stderr(), "Comparing {}...", path.display());
+            eprintln!("Comparing {}...", path.display());
         }
     }
     // If there are too many candidates, we cannot process them opening all
@@ -274,13 +274,13 @@ fn main() {
                                     }
                                 }
                                 Err(e) => {
-                                    let _ = writeln!(stderr(), "{}", e);
+                                    eprintln!("{}", e);
                                 }
                             }
                         }
                     }
                     Err(e) => {
-                        let _ = writeln!(stderr(), "{}", e);
+                        eprintln!("{}", e);
                     }
                 }
             }
