@@ -191,7 +191,7 @@ struct Args {
     #[structopt(short="v", help="Verbose operation?")]
     verbose: bool,
     #[structopt(help="Root directory or directories to search")]
-    roots: Vec<PathBuf>,
+    roots: Vec<String>,
 }
 
 fn main() {
