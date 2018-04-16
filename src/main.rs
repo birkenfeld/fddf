@@ -223,10 +223,10 @@ fn main() {
         Select::Any
     };
 
-    let matches_pattern = |entry: &DirEntry| match &select {
+    let matches_pattern = |entry: &DirEntry| match select {
         Select::Any => true,
-        Select::Pattern(p) => entry.file_name().to_str().map_or(false, |f| p.matches(f)),
-        Select::Regex(r) => entry.file_name().to_str().map_or(false, |f| r.is_match(f)),
+        Select::Pattern(ref p) => entry.file_name().to_str().map_or(false, |f| p.matches(f)),
+        Select::Regex(ref r) => entry.file_name().to_str().map_or(false, |f| r.is_match(f)),
     };
 
     // See below for these maps' purpose.
