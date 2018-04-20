@@ -196,9 +196,9 @@ struct Args {
     singleline: bool,
     #[structopt(short="v", help="Verbose operation?")]
     verbose: bool,
-    #[structopt(short="f", help="Check only filenames matching this pattern")]
+    #[structopt(short="f", help="Check only filenames matching this pattern", group="patterns")]
     pattern: Option<Pattern>,
-    #[structopt(short="F", help="Check only filenames matching this regexp")]
+    #[structopt(short="F", help="Check only filenames matching this regexp", group="patterns")]
     regexp: Option<Regex>,
     #[structopt(help="Root directory or directories to search")]
     roots: Vec<String>,
