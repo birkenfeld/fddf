@@ -188,6 +188,8 @@ struct Args {
     #[structopt(short="M", parse(try_from_str="parse_byte_size"),
                 help="Maximum file size to consider")]
     maxsize: Option<u64>,
+    #[structopt(short="A", help="Exclude hidden files")]
+    nohidden: bool,
     #[structopt(short="S", help="Don't scan recursively in directories?")]
     nonrecursive: bool,
     #[structopt(short="t", help="Report a grand total of duplicates?")]
@@ -204,8 +206,15 @@ struct Args {
     roots: Vec<String>,
 }
 
+fn is_hidden_file(entry: &DirEntry) -> bool {
+    entry.file_name()
+        .to_str()
+        .map(|s| s.starts_with("."))
+        .unwrap_or(false)
+}
+
 fn main() {
-    let Args { minsize, maxsize, verbose, singleline, grandtotal,
+    let Args { minsize, maxsize, verbose, singleline, grandtotal, nohidden,
                nonrecursive, pattern, regexp, roots } = Args::from_args();
     let maxsize = maxsize.unwrap_or(u64::max_value());
 
@@ -222,6 +231,12 @@ fn main() {
     } else {
         Select::Any
     };
+
+    let exclude_hidden = |entry: &DirEntry| match nohidden {
+        false => false,
+        true => is_hidden_file(entry)
+    };
+
 
     let matches_pattern = |entry: &DirEntry| match select {
         Select::Any => true,
@@ -307,7 +322,7 @@ fn main() {
                                     let fsize = meta.len();
                                     if fsize >= minsize && fsize <= maxsize {
                                         if check_inode(&mut inodes, &dir_entry) {
-                                            if matches_pattern(&dir_entry) {
+                                            if !exclude_hidden(&dir_entry) && matches_pattern(&dir_entry) {
                                                 process(fsize, dir_entry);
                                             }
                                         }
