@@ -175,17 +175,13 @@ fn compare_files(verbose: bool, fsize: u64, paths: Vec<PathBuf>, tx: DupeSender)
     }
 }
 
-fn parse_byte_size(s: &str) -> Result<u64, String> {
-    unbytify::unbytify(&s).map_err(|_| format!("{:?} is not a byte size", s))
-}
-
 #[derive(StructOpt)]
 #[structopt(about="A parallel duplicate file finder.")]
 struct Args {
-    #[structopt(short="m", default_value="1", parse(try_from_str="parse_byte_size"),
+    #[structopt(short="m", default_value="1", parse(try_from_str="unbytify::unbytify"),
                 help="Minimum file size to consider")]
     minsize: u64,
-    #[structopt(short="M", parse(try_from_str="parse_byte_size"),
+    #[structopt(short="M", parse(try_from_str="unbytify::unbytify"),
                 help="Maximum file size to consider")]
     maxsize: Option<u64>,
     #[structopt(short="S", help="Don't scan recursively in directories?")]
