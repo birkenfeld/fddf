@@ -1,14 +1,3 @@
-#[macro_use]
-extern crate structopt;
-extern crate walkdir;
-extern crate scoped_pool;
-extern crate num_cpus;
-extern crate blake2;
-extern crate fnv;
-extern crate unbytify;
-extern crate regex;
-extern crate glob;
-
 use std::fs::File;
 use std::io::{self, Read, Write, Seek, SeekFrom};
 use std::path::PathBuf;
