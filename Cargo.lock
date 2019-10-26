@@ -84,7 +84,7 @@ dependencies = [
 
 [[package]]
 name = "fddf"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "blake2 0.8.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "fnv 1.0.6 (registry+https://github.com/rust-lang/crates.io-index)",
