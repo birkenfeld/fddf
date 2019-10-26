@@ -1,15 +1,4 @@
-#[macro_use]
-extern crate structopt;
-extern crate walkdir;
-extern crate scoped_pool;
-extern crate num_cpus;
-extern crate blake2;
-extern crate fnv;
-extern crate unbytify;
-extern crate regex;
-extern crate glob;
-
-use std::fs::File;
+use std::fs::{File, Metadata};
 use std::io::{self, Read, Write, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::sync::mpsc::{Sender, channel};
@@ -19,7 +8,7 @@ use fnv::{FnvHashMap as HashMap, FnvHashSet as HashSet};
 use blake2::{Blake2b, Digest};
 use walkdir::{DirEntry, WalkDir};
 #[cfg(unix)]
-use walkdir::DirEntryExt;
+use std::os::unix::fs::MetadataExt;
 use regex::Regex;
 use glob::Pattern;
 
@@ -31,7 +20,7 @@ type HashSender = Sender<(u64, PathBuf, Vec<u8>)>;
 type DupeSender = Sender<(u64, Vec<PathBuf>)>;
 
 const BLOCKSIZE: usize = 4096;
-const GAPSIZE: i64 = 102400;
+const GAPSIZE: i64 = 102_400;
 
 fn hash_file_inner(path: &PathBuf) -> io::Result<Vec<u8>> {
     let mut buf = [0u8; BLOCKSIZE];
@@ -175,20 +164,16 @@ fn compare_files(verbose: bool, fsize: u64, paths: Vec<PathBuf>, tx: DupeSender)
     }
 }
 
-fn parse_byte_size(s: &str) -> Result<u64, String> {
-    unbytify::unbytify(&s).map_err(|_| format!("{:?} is not a byte size", s))
-}
-
 #[derive(StructOpt)]
 #[structopt(about="A parallel duplicate file finder.")]
 struct Args {
-    #[structopt(short="m", default_value="1", parse(try_from_str="parse_byte_size"),
+    #[structopt(short="m", default_value="1", parse(try_from_str=unbytify::unbytify),
                 help="Minimum file size to consider")]
     minsize: u64,
-    #[structopt(short="M", parse(try_from_str="parse_byte_size"),
+    #[structopt(short="M", parse(try_from_str=unbytify::unbytify),
                 help="Maximum file size to consider")]
     maxsize: Option<u64>,
-    #[structopt(short="A", help="Exclude hidden files")]
+    #[structopt(short="H", help="Exclude Unix hidden files (names starting with dot)")]
     nohidden: bool,
     #[structopt(short="S", help="Don't scan recursively in directories?")]
     nonrecursive: bool,
@@ -203,7 +188,7 @@ struct Args {
     #[structopt(short="F", help="Check only filenames matching this regexp", group="patterns")]
     regexp: Option<Regex>,
     #[structopt(help="Root directory or directories to search")]
-    roots: Vec<String>,
+    roots: Vec<PathBuf>,
 }
 
 fn is_hidden_file(entry: &DirEntry) -> bool {
@@ -232,11 +217,7 @@ fn main() {
         Select::Any
     };
 
-    let exclude_hidden = |entry: &DirEntry| match nohidden {
-        false => false,
-        true => is_hidden_file(entry)
-    };
-
+    let hidden_excluded = |entry: &DirEntry| nohidden && is_hidden_file(entry);
 
     let matches_pattern = |entry: &DirEntry| match select {
         Select::Any => true,
@@ -252,11 +233,11 @@ fn main() {
     // We take care to avoid visiting a single inode twice,
     // which takes care of (false positive) hardlinks.
     #[cfg(unix)]
-    fn check_inode(set: &mut HashSet<u64>, entry: &DirEntry) -> bool {
-        set.insert(entry.ino())
+    fn check_inode(set: &mut HashSet<(u64, u64)>, entry: &Metadata) -> bool {
+        set.insert((entry.dev(), entry.ino()))
     }
     #[cfg(not(unix))]
-    fn check_inode(_: &mut HashSet<u64>, _: &DirEntry) -> bool {
+    fn check_inode(_: &mut HashSet<(u64, u64)>, _: &Vec<()>) -> bool {
         true
     }
 
@@ -307,6 +288,7 @@ fn main() {
 
         // The main thread just walks and filters the directory tree.  Symlinks
         // are uninteresting and ignored.
+        let roots = if roots.is_empty() { vec![".".into()] } else { roots };
         for root in roots {
             let walkdir = if nonrecursive {
                 WalkDir::new(root).max_depth(1).follow_links(false)
@@ -321,8 +303,8 @@ fn main() {
                                 Ok(meta) => {
                                     let fsize = meta.len();
                                     if fsize >= minsize && fsize <= maxsize {
-                                        if check_inode(&mut inodes, &dir_entry) {
-                                            if !exclude_hidden(&dir_entry) && matches_pattern(&dir_entry) {
+                                        if check_inode(&mut inodes, &meta) {
+                                            if !hidden_excluded(&dir_entry) && matches_pattern(&dir_entry) {
                                                 process(fsize, dir_entry);
                                             }
                                         }
