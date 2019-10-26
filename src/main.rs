@@ -167,10 +167,10 @@ fn compare_files(verbose: bool, fsize: u64, paths: Vec<PathBuf>, tx: DupeSender)
 #[derive(StructOpt)]
 #[structopt(about="A parallel duplicate file finder.")]
 struct Args {
-    #[structopt(short="m", default_value="1", parse(try_from_str="unbytify::unbytify"),
+    #[structopt(short="m", default_value="1", parse(try_from_str=unbytify::unbytify),
                 help="Minimum file size to consider")]
     minsize: u64,
-    #[structopt(short="M", parse(try_from_str="unbytify::unbytify"),
+    #[structopt(short="M", parse(try_from_str=unbytify::unbytify),
                 help="Maximum file size to consider")]
     maxsize: Option<u64>,
     #[structopt(short="S", help="Don't scan recursively in directories?")]
@@ -186,7 +186,7 @@ struct Args {
     #[structopt(short="F", help="Check only filenames matching this regexp", group="patterns")]
     regexp: Option<Regex>,
     #[structopt(help="Root directory or directories to search")]
-    roots: Vec<String>,
+    roots: Vec<PathBuf>,
 }
 
 fn main() {
