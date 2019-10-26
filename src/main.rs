@@ -20,7 +20,7 @@ type HashSender = Sender<(u64, PathBuf, Vec<u8>)>;
 type DupeSender = Sender<(u64, Vec<PathBuf>)>;
 
 const BLOCKSIZE: usize = 4096;
-const GAPSIZE: i64 = 102400;
+const GAPSIZE: i64 = 102_400;
 
 fn hash_file_inner(path: &PathBuf) -> io::Result<Vec<u8>> {
     let mut buf = [0u8; BLOCKSIZE];
@@ -277,6 +277,7 @@ fn main() {
 
         // The main thread just walks and filters the directory tree.  Symlinks
         // are uninteresting and ignored.
+        let roots = if roots.is_empty() { vec![".".into()] } else { roots };
         for root in roots {
             let walkdir = if nonrecursive {
                 WalkDir::new(root).max_depth(1).follow_links(false)
