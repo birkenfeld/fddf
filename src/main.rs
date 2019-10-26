@@ -1,4 +1,4 @@
-use std::fs::File;
+use std::fs::{File, Metadata};
 use std::io::{self, Read, Write, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::sync::mpsc::{Sender, channel};
@@ -8,7 +8,7 @@ use fnv::{FnvHashMap as HashMap, FnvHashSet as HashSet};
 use blake2::{Blake2b, Digest};
 use walkdir::{DirEntry, WalkDir};
 #[cfg(unix)]
-use walkdir::DirEntryExt;
+use std::os::unix::fs::MetadataExt;
 use regex::Regex;
 use glob::Pattern;
 
@@ -222,11 +222,11 @@ fn main() {
     // We take care to avoid visiting a single inode twice,
     // which takes care of (false positive) hardlinks.
     #[cfg(unix)]
-    fn check_inode(set: &mut HashSet<u64>, entry: &DirEntry) -> bool {
-        set.insert(entry.ino())
+    fn check_inode(set: &mut HashSet<(u64, u64)>, entry: &Metadata) -> bool {
+        set.insert((entry.dev(), entry.ino()))
     }
     #[cfg(not(unix))]
-    fn check_inode(_: &mut HashSet<u64>, _: &DirEntry) -> bool {
+    fn check_inode(_: &mut HashSet<(u64, u64)>, _: &Vec<()>) -> bool {
         true
     }
 
@@ -292,7 +292,7 @@ fn main() {
                                 Ok(meta) => {
                                     let fsize = meta.len();
                                     if fsize >= minsize && fsize <= maxsize {
-                                        if check_inode(&mut inodes, &dir_entry) {
+                                        if check_inode(&mut inodes, &meta) {
                                             if matches_pattern(&dir_entry) {
                                                 process(fsize, dir_entry);
                                             }
