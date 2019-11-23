@@ -1,6 +1,6 @@
 [package]
 name = "fddf"
-version = "1.6.0"
+version = "1.6.1"
 authors = ["Georg Brandl <georg@python.org>"]
 description = "Fast, parallelized duplicate file finder."
 repository = "https://github.com/birkenfeld/fddf"
