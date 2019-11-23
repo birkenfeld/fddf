@@ -237,7 +237,7 @@ fn main() {
         set.insert((entry.dev(), entry.ino()))
     }
     #[cfg(not(unix))]
-    fn check_inode(_: &mut HashSet<(u64, u64)>, _: &Vec<()>) -> bool {
+    fn check_inode(_: &mut HashSet<(u64, u64)>, _: &Metadata) -> bool {
         true
     }
 
