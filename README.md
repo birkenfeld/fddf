@@ -17,6 +17,8 @@ cargo build --release
 cargo run --release
 ```
 
+Minimum supported Rust version is 1.39.0.
+
 ## Usage
 
 ```
