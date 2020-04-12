@@ -25,17 +25,17 @@ const GAPSIZE: i64 = 102_400;
 fn hash_file_inner(path: &PathBuf) -> io::Result<Vec<u8>> {
     let mut buf = [0u8; BLOCKSIZE];
     let mut fp = File::open(&path)?;
-    let mut digest = blake3::new();;
+    let mut digest = Hasher::new();
     // When we compare byte-by-byte, we don't need to hash the whole file.
     // Instead, hash a block of 4kB, skipping 100kB.
     loop {
         match fp.read(&mut buf)? {
             0 => break,
             n => digest.update(&buf[..n]),
-        }
+        };
         fp.seek(SeekFrom::Current(GAPSIZE))?;
     }
-    Ok(digest.finalize()as_bytes().to_vec())
+    Ok(digest.finalize().as_bytes().to_vec())
 }
 
 fn hash_file(verbose: bool, fsize: u64, path: PathBuf, tx: HashSender) {
