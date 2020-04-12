@@ -4,7 +4,7 @@ Fast data dupe finder
 This is a small Rust command-line program to find duplicate files in a directory
 recursively.  It uses a thread pool to calculate file hashes in parallel.
 
-Duplicates are found by checking size, then (Blake2) hashes of parts of files of
+Duplicates are found by checking size, then (Blake3) hashes of parts of files of
 same size, then a byte-for-byte comparison.
 
 ## Build/install
