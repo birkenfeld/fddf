@@ -183,6 +183,8 @@ struct Args {
     singleline: bool,
     #[structopt(short="v", help="Verbose operation?")]
     verbose: bool,
+    #[structopt(short="0", help="With -s, separate dupes with NUL, replace newline with two NULs")]
+    nul: bool,
     #[structopt(short="f", help="Check only filenames matching this pattern", group="patterns")]
     pattern: Option<Pattern>,
     #[structopt(short="F", help="Check only filenames matching this regexp", group="patterns")]
@@ -200,7 +202,7 @@ fn is_hidden_file(entry: &DirEntry) -> bool {
 
 fn main() {
     let Args { minsize, maxsize, verbose, singleline, grandtotal, nohidden,
-               nonrecursive, pattern, regexp, roots } = Args::from_args();
+               nonrecursive, nul, pattern, regexp, roots } = Args::from_args();
     let maxsize = maxsize.unwrap_or(u64::max_value());
 
     enum Select {
@@ -339,7 +341,11 @@ fn main() {
                 for (i, path) in entries.into_iter().enumerate() {
                     write!(out, "{}", path.display()).unwrap();
                     if i < last {
-                        write!(out, " ").unwrap();
+                        if nul {
+                            write!(out, "\0").unwrap();
+                        } else {
+                            write!(out, " ").unwrap();
+                        }
                     }
                 }
             } else {
@@ -348,7 +354,12 @@ fn main() {
                     writeln!(out, "    {}", path.display()).unwrap();
                 }
             }
-            writeln!(out).unwrap();
+
+            if nul {
+                write!(out, "\0\0").unwrap();
+            } else {
+                writeln!(out).unwrap();
+            }
         };
 
         // Compare files with matching hashes byte-by-byte, using the same thread
