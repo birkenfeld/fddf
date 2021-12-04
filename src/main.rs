@@ -1,4 +1,18 @@
-use std::fs::{File, Metadata};
+#![cfg_attr(use_windows_file_numbers, feature(windows_by_handle))]
+
+#[cfg(any(use_ino, use_ino_placeholder))]
+use std::fs::Metadata;
+
+#[cfg(use_ino)]
+use std::os::unix::fs::MetadataExt;
+
+#[cfg(use_windows_file_numbers)]
+use std::os::windows::fs::MetadataExt;
+
+#[cfg(use_windows_file_numbers)]
+use std::path::Path;
+
+use std::fs::File;
 use std::io::{self, Read, Write, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::sync::mpsc::{Sender, channel};
@@ -7,8 +21,6 @@ use structopt::StructOpt;
 use fnv::{FnvHashMap as HashMap, FnvHashSet as HashSet};
 use blake3::Hasher;
 use walkdir::{DirEntry, WalkDir};
-#[cfg(unix)]
-use std::os::unix::fs::MetadataExt;
 use regex::Regex;
 use glob::Pattern;
 
@@ -234,14 +246,26 @@ fn main() {
 
     // We take care to avoid visiting a single inode twice,
     // which takes care of (false positive) hardlinks.
-    #[cfg(unix)]
+    #[cfg(use_ino)]
     fn check_inode(set: &mut HashSet<(u64, u64)>, entry: &Metadata) -> bool {
         set.insert((entry.dev(), entry.ino()))
     }
-    #[cfg(not(unix))]
+
+    #[cfg(use_windows_file_numbers)]
+    fn check_inode(set: &mut HashSet<(u32, u64)>, entry: &Path) -> Option<bool> {
+        let meta = match std::fs::metadata(entry){
+            Ok(m) => m,
+            Err(_) => return None,
+        };
+        
+        return Some(set.insert( (meta.volume_serial_number()?, meta.file_index()?) ));
+    }
+    
+    #[cfg(use_ino_placeholder)]
     fn check_inode(_: &mut HashSet<(u64, u64)>, _: &Metadata) -> bool {
         true
     }
+    
 
     // Set up thread pool for our various tasks.  Number of CPUs + 1 has been
     // found to be a good pool size, likely since the walker thread should be
@@ -305,10 +329,22 @@ fn main() {
                                 Ok(meta) => {
                                     let fsize = meta.len();
                                     if fsize >= minsize && fsize <= maxsize {
+                                        
+                                        #[cfg(any(use_ino, use_ino_placeholder))]
                                         if check_inode(&mut inodes, &meta) {
                                             if !hidden_excluded(&dir_entry) && matches_pattern(&dir_entry) {
                                                 process(fsize, dir_entry);
                                             }
+                                        }
+                                        
+                                        
+                                        #[cfg(use_windows_file_numbers)]
+                                        match check_inode(&mut inodes, dir_entry.path()) {
+                                            Some(true) => if !hidden_excluded(&dir_entry) && matches_pattern(&dir_entry) {
+                                                process(fsize, dir_entry);
+                                            },
+                                            Some(false) => (),
+                                            None => eprintln!("Can't determine file or device number"),
                                         }
                                     }
                                 }
