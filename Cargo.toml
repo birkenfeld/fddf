@@ -14,7 +14,7 @@ lto = true
 [dependencies]
 structopt = "0.3.26"
 walkdir = "2.3.2"
-scoped-pool = "1.0.0"
+scoped_threadpool = "0.1.9"
 num_cpus = "1.13.1"
 blake3 = "0.3.8"
 fnv = "1.0.7"

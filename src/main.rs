@@ -246,7 +246,7 @@ fn main() {
     // Set up thread pool for our various tasks.  Number of CPUs + 1 has been
     // found to be a good pool size, likely since the walker thread should be
     // doing mostly IO.
-    let pool = scoped_pool::Pool::new(num_cpus::get() + 1);
+    let mut pool = scoped_threadpool::Pool::new(num_cpus::get() as u32 + 1);
     pool.scoped(|scope| {
         let (tx, rx) = channel();
 
