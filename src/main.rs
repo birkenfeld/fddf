@@ -394,3 +394,16 @@ fn main() {
         println!("    {:.1} {} of space taken by duplicates", val, suffix);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_hash_file() {
+        let path = PathBuf::from("test_file.txt");
+        let (tx, _rx) = channel();
+        hash_file(false, 1024, path, tx); // This will fail if the file does not exist or cannot be read
+    }
+
+}
